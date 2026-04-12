@@ -1,35 +1,47 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Ordsky</title>
+    <title>Klassens Ordsky - Admin</title>
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/wordcloud2.js/1.2.2/wordcloud2.min.js"></script>
     <style>
-        body { font-family: sans-serif; text-align: center; background: #f4f4f9; }
-        #canvas-container { width: 80%; height: 500px; margin: 20px auto; background: white; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        body { font-family: sans-serif; text-align: center; background: #eef2f7; padding: 20px; }
+        .container { max-width: 900px; margin: auto; background: white; padding: 20px; border-radius: 15px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); }
+        #canvas-container { width: 100%; height: 500px; position: relative; margin-top: 20px; border: 1px solid #eee; background: white; cursor: pointer; }
         canvas { width: 100%; height: 100%; }
-        .input-area { margin-top: 20px; }
-        input { padding: 10px; width: 200px; border: 1px solid #ccc; border-radius: 5px; }
-        button { padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer; }
+        input { padding: 12px; width: 50%; border: 2px solid #ddd; border-radius: 25px; outline: none; }
+        button { padding: 12px 25px; background: #28a745; color: white; border: none; border-radius: 25px; cursor: pointer; font-weight: bold; margin: 5px; }
+        
+        /* Admin-panel er skjult som standard */
+        #admin-panel { display: none; background: #fff3cd; padding: 15px; border-radius: 10px; margin-bottom: 20px; border: 1px solid #ffeeba; }
+        .btn-reset { background: #dc3545; }
+        .admin-msg { color: #856404; font-size: 0.9em; margin-bottom: 10px; }
     </style>
 </head>
 <body>
 
-    <h1>Hva tenker dere om koding?</h1>
-    
-    <div class="input-area">
-        <input type="text" id="wordInput" placeholder="Skriv et ord..." maxlength="20">
-        <button onclick="sendWord()">Send inn!</button>
-    </div>
+    <div class="container">
+        <div id="admin-panel">
+            <p class="admin-msg"><strong>Lærer-modus aktivert:</strong> Klikk på et ord i skyen for å slette det helt, eller bruk knappen under.</p>
+            <button class="btn-reset" onclick="resetCloud()">Tøm hele ordskyen</button>
+        </div>
 
-    <div id="canvas-container">
-        <canvas id="wordCloudCanvas"></canvas>
+        <h1>☁️ Klassens Ordsky</h1>
+        
+        <div class="input-area">
+            <input type="text" id="wordInput" placeholder="Skriv et ord..." maxlength="20">
+            <button onclick="sendWord()">Send inn!</button>
+        </div>
+
+        <div id="canvas-container">
+            <canvas id="wordCloudCanvas"></canvas>
+        </div>
     </div>
 
     <script>
-        // DIN FIREBASE CONFIG HER (Lim inn det du kopierte i Steg 1)
-        const firebaseConfig = {
+        // --- DIN KONFIGURASJON ---
+         const firebaseConfig = {
   apiKey: "AIzaSyAjXuvWo4AH8yQPJwDXkcOZGgW1JTNGMqY",
   authDomain: "ordsky-github.firebaseapp.com",
     databaseURL: "https://ordsky-github-default-rtdb.europe-west1.firebasedatabase.app/",
@@ -40,11 +52,17 @@
   measurementId: "G-TNMQZN3XTG"
 };
 
-        // Initialiser Firebase
         firebase.initializeApp(firebaseConfig);
         const database = firebase.database();
 
-        // Funksjon for å sende ord
+        // Sjekk om vi er i admin-modus via URL: ?admin=hemmelig
+        const urlParams = new URLSearchParams(window.location.search);
+        const isAdmin = urlParams.get('admin') === 'hemmelig'; // Du kan bytte ut 'hemmelig' med ditt eget passord
+
+        if (isAdmin) {
+            document.getElementById('admin-panel').style.display = 'block';
+        }
+
         function sendWord() {
             const input = document.getElementById('wordInput');
             const word = input.value.trim().toLowerCase();
@@ -54,32 +72,61 @@
             }
         }
 
-        // Lytt etter endringer og oppdater ordskyen
+        // Funksjon for å tømme hele databasen
+        function resetCloud() {
+            if (confirm("Er du sikker på at du vil slette ALLE ordene?")) {
+                database.ref('words').remove();
+            }
+        }
+
+        // Funksjon for å slette ett spesifikt ord (alle forekomster)
+        function deleteWord(wordToDelete) {
+            if (isAdmin && confirm(`Vil du fjerne ordet "${wordToDelete}"?`)) {
+                const ref = database.ref('words');
+                ref.once('value', (snapshot) => {
+                    snapshot.forEach((childSnapshot) => {
+                        if (childSnapshot.val() === wordToDelete) {
+                            childSnapshot.ref.remove();
+                        }
+                    });
+                });
+            }
+        }
+
         database.ref('words').on('value', (snapshot) => {
             const data = snapshot.val();
-            if (!data) return;
+            const canvas = document.getElementById('wordCloudCanvas');
+            canvas.width = canvas.parentElement.offsetWidth;
+            canvas.height = canvas.parentElement.offsetHeight;
 
-            // Tell antall forekomster av hvert ord
+            if (!data) {
+                const ctx = canvas.getContext("2d");
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = "#ccc";
+                ctx.textAlign = "center";
+                ctx.fillText("Skyen er tom. Venter på ord...", canvas.width/2, canvas.height/2);
+                return;
+            }
+
             const wordsArray = Object.values(data);
             const counts = {};
             wordsArray.forEach(w => counts[w] = (counts[w] || 0) + 1);
 
-            // Formatér for WordCloud2.js: [['ord', vekt], ['ord2', vekt]]
-            const list = Object.entries(counts).map(([word, count]) => [word, count * 10]);
+            const list = Object.entries(counts).map(([word, count]) => [word, 10 + (count * 15)]);
 
-            // Tegn ordskyen
-            const canvas = document.getElementById('wordCloudCanvas');
-            canvas.width = canvas.parentElement.offsetWidth;
-            canvas.height = canvas.parentElement.offsetHeight;
-            
             WordCloud(canvas, { 
                 list: list,
                 gridSize: 10,
-                weightFactor: 2,
+                weightFactor: 1,
                 fontFamily: 'sans-serif',
                 color: 'random-dark',
-                rotateRatio: 0.5,
-                backgroundColor: '#fff'
+                rotateRatio: 0,
+                backgroundColor: '#fff',
+                click: function(item) {
+                    if (isAdmin) {
+                        deleteWord(item[0]);
+                    }
+                }
             });
         });
     </script>
